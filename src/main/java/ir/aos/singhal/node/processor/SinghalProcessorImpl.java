@@ -21,7 +21,6 @@ public class SinghalProcessorImpl extends AbstractProcessor implements SinghalPr
 
     private List<SinghalResource> singhalResources;
     private List<SinghalProcessor> singhalProcessors = new ArrayList<>();
-    private BlockingQueue<Task> tasksQueue = new LinkedBlockingQueue<>();
 
     private boolean stopped = false;
 
@@ -230,10 +229,6 @@ public class SinghalProcessorImpl extends AbstractProcessor implements SinghalPr
                     this.notify();
                 }
         }
-    }
-
-    public void setNodesFactory(NodesFactory nodesFactory) {
-        this.nodesFactory = nodesFactory;
     }
 
 }

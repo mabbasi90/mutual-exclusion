@@ -2,11 +2,16 @@ package ir.aos.raymond.node.processor;
 
 import ir.aos.common.node.processor.AbstractProcessor;
 import ir.aos.common.task.Task;
-import ir.aos.raymond.resource.RaymondlResource;
+import ir.aos.raymond.resource.RaymondResource;
+import ir.aos.raymond.resource.RaymondToken;
 import org.apache.log4j.Logger;
 
 import java.rmi.RemoteException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Created by Mohammad on 7/10/2016.
@@ -14,27 +19,19 @@ import java.util.*;
 public class RaymondProcessorImpl extends AbstractProcessor implements RaymondProcessor {
     private static final Logger LOG = Logger.getLogger(RaymondProcessorImpl.class);
 
-    private RaymondProcessor parent;
-    private Set<RaymondProcessor> children = new HashSet<>();
-    private List<RaymondlResource> raymondResources;
+    private List<RaymondResource> resources = new ArrayList<>();
+
+    private Map<Integer, Boolean> resourcesNeeded = new ConcurrentHashMap<>();
+    private final Object resourcesLock = new Object();
 
     @Override
     public void init(Properties properties) throws RemoteException {
         readConfigs(properties);
         nodesFactory.exportService(this, RaymondProcessor.class, PROCESSOR_SERVICE, exportPort);
-        raymondResources = new ArrayList<>();
         for (int resourceId = 0; resourceId < resourcesNum; resourceId++) {
-            raymondResources.add(new RaymondlResource(resourceId));
+            resources.add(new RaymondResource(resourceId, this, processorUrls, nodesFactory));
         }
 
-        // TODO setting parent and children
-//        for (int i = 0; i < processorsNum; i++) {
-//            if (id == i) {
-//                raymondPR.add(this);
-//            } else {
-//                singhalProcessors.add(nodesFactory.createSinghalProcessorClient(processorUrls[i]));
-//            }
-//        }
         dispatcher = nodesFactory.createDispatcherClient(dispatcherUrl);
         this.start();
 
@@ -43,7 +40,13 @@ public class RaymondProcessorImpl extends AbstractProcessor implements RaymondPr
 
     @Override
     public void addTask(Task task) throws InterruptedException {
+        tasksQueue.put(task);
+        LOG.info("Got task " + task);
+    }
 
+    private void distributedLog(String log) {
+        LOG.info(log);
+        dispatcher.log(log, this.id);
     }
 
     @Override
@@ -53,15 +56,175 @@ public class RaymondProcessorImpl extends AbstractProcessor implements RaymondPr
             try {
                 task = tasksQueue.take();
             } catch (InterruptedException e) {
-                LOG.info("SinghalProcessor " + id + " is stopped.", e);
+                LOG.info("RaymondProcessor " + id + " is stopped.", e);
                 continue;
             }
-//
-//            specifyRequiredResources(task);
-//            requestResources(task.getResourcesId());
-//            waitForReceivingAllTokens(task);
-//            doTask(task);
-//            exitCriticalSection(task.getResourcesId());
+            requestingToken(task);
+            waitingForTokens(task);
+            doTask(task);
+            exitingCriticalSection(task);
+
         }
     }
+
+    private void requestingToken(Task task) {
+        distributedLog("Need raymondResources " + task.getResourcesId() + " for task " + task.getId() + ".");
+        for (Integer resourceId : task.getResourcesId()) {
+            resourcesNeeded.put(resourceId, false);
+            RaymondResource raymondResource = resources.get(resourceId);
+            boolean hasToken = raymondResource.hasToken();
+            if (!hasToken) {
+                boolean queueEmpty = raymondResource.isQueueEmpty();
+                raymondResource.addRequest(this);
+                if (queueEmpty) {
+                    LOG.info("Requesting from " + raymondResource.getParent().getProcessorId() + " resource " + resourceId);
+                    raymondResource.getParent().request(this.id, resourceId);
+                }
+            } else {
+                distributedLog("Has token " + raymondResource.getId());
+                resourcesNeeded.put(resourceId, true);
+            }
+        }
+    }
+
+    private void waitingForTokens(Task task) {
+        while (resourcesNeeded.values().contains(false)) {
+            try {
+                LOG.info("Tokens stat " + resourcesNeeded);
+                synchronized (this) {
+                    this.wait();
+                }
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+        distributedLog("All Resources " + task.getResourcesId() + " acquired for task " + task.getId() + ".");
+    }
+
+    private void exitingCriticalSection(Task task) {
+        synchronized (resourcesLock) {
+            for (Integer resourceId : task.getResourcesId()) {
+                boolean queueEmpty = resources.get(resourceId).isQueueEmpty();
+                if (!queueEmpty) {
+                    RaymondProcessor first;
+                    try {
+                        first = resources.get(resourceId).getFirst();
+                        if (first != this) {
+                            sendToken(first, resources.get(resourceId).getToken());
+                        }
+                        resources.get(resourceId).removeChild(first);
+                        resources.get(resourceId).setParent(first);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                }
+                queueEmpty = resources.get(resourceId).isQueueEmpty();
+                if (!queueEmpty) {
+                    RaymondProcessor parent = resources.get(resourceId).getParent();
+                    parent.request(this.id, resourceId);
+                    LOG.info("sent request to " + parent + " in exit.");
+                }
+                distributedLog("Released resource " + resourceId + ".");
+                resourcesNeeded.clear();
+            }
+        }
+        distributedLog("Released all raymondResources: " + task.getResourcesId() + ".");
+    }
+
+    private void sendToken(RaymondProcessor first, RaymondToken raymondToken) {
+        distributedLog("Sending " + raymondToken + "  to " + first.getProcessorId());
+        first.receiveToken(raymondToken);
+    }
+
+    private void doTask(Task task) {
+        distributedLog("Started task " + task.getId() + ".");
+        try {
+            Thread.sleep(task.getTaskTime());
+        } catch (InterruptedException e) {
+            LOG.fatal("interrupted while doing my task " + task.getId() + "!!!");
+        }
+        distributedLog("End of task " + task.getId() + ".");
+    }
+
+    @Override
+    public void request(int requesterId, int resourceId) {
+        synchronized (resourcesLock) {
+            distributedLog("Request from " + requesterId + " for resource " + resourceId);
+            RaymondProcessor requester;
+            RaymondResource raymondResource = resources.get(resourceId);
+            if (this.id == requesterId) {
+                requester = this;
+            } else {
+                requester = getChildById(requesterId, resourceId);
+            }
+            if (requester == null) {
+                LOG.fatal("Requester is not a child!");
+            }
+            boolean queueEmpty = raymondResource.isQueueEmpty();
+            if (raymondResource.hasToken()) {
+                if (!resourcesNeeded.containsKey(resourceId) && queueEmpty) {
+                    sendToken(requester, raymondResource.getToken());
+                    raymondResource.removeChild(requester);
+                    raymondResource.setParent(requester);
+                } else {
+                    raymondResource.addRequest(requester);
+                }
+            } else {
+                raymondResource.addRequest(requester);
+                if (queueEmpty) {
+                    raymondResource.getParent().request(this.id, resourceId);
+                }
+            }
+        }
+    }
+
+    @Override
+    public void receiveToken(RaymondToken raymondToken) {
+        try {
+            Integer resourceId = raymondToken.getId();
+            RaymondProcessor first = resources.get(resourceId).getFirst();
+            RaymondProcessor parent = resources.get(resourceId).getParent();
+            LOG.info("received token " + resourceId + " from " + parent.getProcessorId());
+            if (first == null) {
+                resources.get(resourceId).setToken(raymondToken);
+                return;
+            }
+            if (parent != this) {
+                resources.get(resourceId).addChild(parent);
+            }
+            resources.get(resourceId).setParent(first);
+            if (first != this) {
+                LOG.info("send after receive to somebody else: " + first.getProcessorId());
+                sendToken(first, raymondToken);
+                if (!resources.get(resourceId).isQueueEmpty()) {
+                    first.request(this.id, resourceId);
+                }
+            } else {
+                distributedLog("Got resource " + resourceId);
+                resources.get(resourceId).setToken(raymondToken);
+                resourcesNeeded.put(resourceId, true);
+                synchronized (this) {
+                    this.notify();
+                }
+            }
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+
+
+    @Override
+    public int getProcessorId() {
+        return id;
+    }
+
+    private RaymondProcessor getChildById(int id, int resourceId) {
+        return resources.get(resourceId).getChild(id);
+    }
+
+    @Override
+    public String toString() {
+        return "Processor " + id;
+    }
+
 }

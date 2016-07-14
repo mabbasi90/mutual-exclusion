@@ -42,4 +42,9 @@ public abstract class AbstractProcessor extends Thread{
         exportPort = Integer.valueOf(properties.getProperty(EXPORT_PORT));
         id = Integer.valueOf(properties.getProperty(PROCESSOR_ID));
     }
+
+    public void setNodesFactory(NodesFactory nodesFactory) {
+        this.nodesFactory = nodesFactory;
+    }
+
 }

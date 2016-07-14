@@ -4,7 +4,7 @@
        xsi:schemaLocation="http://www.springframework.org/schema/beans
                http://www.springframework.org/schema/beans/spring-beans.xsd">
     <import resource="classpath:nodesFactoryContext.xml"/>
-    <bean id="processor" class="ir.aos.singhal.node.processor.SinghalProcessorImpl">
+    <bean id="singhalProcessor" class="ir.aos.singhal.node.processor.SinghalProcessorImpl">
         <property name="nodesFactory" ref="nodesFactory"/>
     </bean>
 </beans>
