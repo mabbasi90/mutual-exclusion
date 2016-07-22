@@ -2,7 +2,6 @@ package ir.aos.singhal.node.processor;
 
 import ir.aos.common.node.processor.AbstractProcessor;
 import ir.aos.common.task.Task;
-import ir.aos.common.factory.NodesFactory;
 import ir.aos.singhal.resource.SinghalResource;
 import ir.aos.singhal.resource.SinghalToken;
 import org.apache.log4j.Logger;
@@ -12,9 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
-import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.LinkedBlockingQueue;
 
 public class SinghalProcessorImpl extends AbstractProcessor implements SinghalProcessor {
     private static final Logger LOG = Logger.getLogger(SinghalProcessorImpl.class);
@@ -99,6 +96,16 @@ public class SinghalProcessorImpl extends AbstractProcessor implements SinghalPr
     }
 
     private void doTask(Task task) {
+        String resourcesMessages = "";
+        Integer messagesSum = 0;
+        for (Integer resourceId : resourcesNeeded.keySet()) {
+            SinghalResource singhalResource = singhalResources.get(resourceId);
+            int receiveCount = singhalResource.getSinghalToken().getReceiveCount();
+            resourcesMessages += resourceId + ":" + String.valueOf(receiveCount) + " ";
+            messagesSum += receiveCount;
+        }
+
+        LOG.info("Messages sum: " + messagesSum + ", " + resourcesMessages);
         distributedLog("Started task " + task.getId() + ".");
         try {
             Thread.sleep(task.getTaskTime());
@@ -126,7 +133,9 @@ public class SinghalProcessorImpl extends AbstractProcessor implements SinghalPr
         synchronized (resourcesLock) {
             for (Integer resourceId : resourcesId) {
                 singhalResources.get(resourceId).setState(this.id, ir.aos.singhal.node.State.N);
-                singhalResources.get(resourceId).getSinghalToken().setState(this.id, ir.aos.singhal.node.State.N);
+                SinghalToken singhalToken = singhalResources.get(resourceId).getSinghalToken();
+                singhalToken.resetReceiveCount();
+                singhalToken.setState(this.id, ir.aos.singhal.node.State.N);
                 updatingStatuses(resourceId);
                 int j;
                 for (j = 0; j < processorsNum; j++) {
@@ -203,6 +212,8 @@ public class SinghalProcessorImpl extends AbstractProcessor implements SinghalPr
                 }
             }
         }
+        allRequestsCount.incrementAndGet();
+        LOG.info("All messages after request is " + allRequestsCount);
     }
 
     @Override
@@ -220,6 +231,7 @@ public class SinghalProcessorImpl extends AbstractProcessor implements SinghalPr
     @Override
     public void receiveToken(SinghalToken singhalToken) {
         synchronized (resourcesLock) {
+            singhalToken.incrementReceive();
             resourcesNeeded.put(singhalToken.getId(), true);
             singhalResources.get(singhalToken.getId()).setState(this.id, ir.aos.singhal.node.State.E);
             singhalResources.get(singhalToken.getId()).setSinghalToken(singhalToken);
@@ -229,6 +241,8 @@ public class SinghalProcessorImpl extends AbstractProcessor implements SinghalPr
                     this.notify();
                 }
         }
+        allRequestsCount.incrementAndGet();
+        LOG.info("All messages after receive is " + allRequestsCount);
     }
 
 }

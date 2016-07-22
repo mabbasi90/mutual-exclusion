@@ -7,6 +7,7 @@ import ir.aos.common.task.Task;
 import java.util.Properties;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Created by Mohammad on 7/10/2016.
@@ -33,6 +34,8 @@ public abstract class AbstractProcessor extends Thread{
     protected int exportPort;
 
     protected boolean stopped = false;
+
+    protected AtomicInteger allRequestsCount = new AtomicInteger();
 
     protected void readConfigs(Properties properties) {
         resourcesNum = Integer.valueOf(properties.getProperty(RESOURCES_NUM));

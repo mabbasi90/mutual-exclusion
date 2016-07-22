@@ -100,4 +100,12 @@ public class RaymondResource {
     public String toString() {
         return "Resource " + resourceId;
     }
+
+    public void resetTokenReceiveCount() {
+        token.resetReceiveCount();
+    }
+
+    public int getReceiveCount() {
+        return token.getReceiveCount();
+    }
 }

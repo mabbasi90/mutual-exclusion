@@ -95,7 +95,7 @@ public class RaymondProcessorImpl extends AbstractProcessor implements RaymondPr
                     this.wait();
                 }
             } catch (InterruptedException e) {
-                e.printStackTrace();
+                LOG.info("Interrupted!", e);
             }
         }
         distributedLog("All Resources " + task.getResourcesId() + " acquired for task " + task.getId() + ".");
@@ -104,6 +104,7 @@ public class RaymondProcessorImpl extends AbstractProcessor implements RaymondPr
     private void exitingCriticalSection(Task task) {
         synchronized (resourcesLock) {
             for (Integer resourceId : task.getResourcesId()) {
+                resources.get(resourceId).resetTokenReceiveCount();
                 boolean queueEmpty = resources.get(resourceId).isQueueEmpty();
                 if (!queueEmpty) {
                     RaymondProcessor first;
@@ -115,7 +116,7 @@ public class RaymondProcessorImpl extends AbstractProcessor implements RaymondPr
                         resources.get(resourceId).removeChild(first);
                         resources.get(resourceId).setParent(first);
                     } catch (InterruptedException e) {
-                        e.printStackTrace();
+                        LOG.info("Interrupted!", e);
                     }
                 }
                 queueEmpty = resources.get(resourceId).isQueueEmpty();
@@ -137,6 +138,16 @@ public class RaymondProcessorImpl extends AbstractProcessor implements RaymondPr
     }
 
     private void doTask(Task task) {
+        String resourcesMessages = "";
+        Integer messagesSum = 0;
+        for (Integer resourceId : resourcesNeeded.keySet()) {
+            RaymondResource raymondResource = resources.get(resourceId);
+            int receiveCount = raymondResource.getReceiveCount();
+            resourcesMessages += resourceId + ":" + String.valueOf(receiveCount) + " ";
+            messagesSum += receiveCount;
+        }
+
+        LOG.info("Messages sum: " + messagesSum + ", " + resourcesMessages);
         distributedLog("Started task " + task.getId() + ".");
         try {
             Thread.sleep(task.getTaskTime());
@@ -176,10 +187,13 @@ public class RaymondProcessorImpl extends AbstractProcessor implements RaymondPr
                 }
             }
         }
+        allRequestsCount.incrementAndGet();
+        LOG.info("All messages after request is " + allRequestsCount);
     }
 
     @Override
     public void receiveToken(RaymondToken raymondToken) {
+        raymondToken.incrementReceive();
         try {
             Integer resourceId = raymondToken.getId();
             RaymondProcessor first = resources.get(resourceId).getFirst();
@@ -207,8 +221,10 @@ public class RaymondProcessorImpl extends AbstractProcessor implements RaymondPr
                     this.notify();
                 }
             }
+            allRequestsCount.incrementAndGet();
+            LOG.info("All messages after receive is " + allRequestsCount);
         } catch (InterruptedException e) {
-            e.printStackTrace();
+            LOG.info("Interrupted!", e);
         }
     }
 
